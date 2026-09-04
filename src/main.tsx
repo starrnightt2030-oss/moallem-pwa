@@ -7,6 +7,7 @@ import App from './App'
 import { AuthProvider } from './store/auth'
 import { SettingsProvider } from './store/settings'
 import { ConfirmProvider } from './components/ui'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { applyTheme, useUi } from './store/ui'
 import './index.css'
 
@@ -25,6 +26,7 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
+    <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
       <SettingsProvider>
         <AuthProvider>
@@ -43,6 +45,7 @@ createRoot(document.getElementById('root')!).render(
         </AuthProvider>
       </SettingsProvider>
     </QueryClientProvider>
+    </ErrorBoundary>
   </StrictMode>,
 )
 

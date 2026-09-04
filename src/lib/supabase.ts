@@ -24,20 +24,12 @@ export function purgeStoredSession() {
   }
 }
 
-/**
- * قفل بسيط بدل navigator.locks.
- * القفل الافتراضي قد يعلق إلى الأبد لو فشل تجديد توكن غير صالح،
- * فيبقى التطبيق واقفًا على شاشة التحميل. هذا البديل ينفّذ العملية مباشرة.
- */
-const passthroughLock = async <R,>(_name: string, _acquireTimeout: number, fn: () => Promise<R>): Promise<R> => fn()
-
 export const supabase = createClient<Database>(url ?? 'http://localhost', anon ?? 'public-anon-key', {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: false,
     storageKey: AUTH_STORAGE_KEY,
-    lock: passthroughLock,
   },
   global: { headers: { 'x-application-name': 'moallem-pwa' } },
 })
