@@ -13,15 +13,42 @@ export const STUDENT_EMAIL_DOMAIN =
 export const studentEmail = (code: string) =>
   `${code.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '')}@${STUDENT_EMAIL_DOMAIN}`
 
+export const AUTH_STORAGE_KEY = 'moallem.auth'
+
+/** مسح الجلسة المخزّنة مباشرةً — يعمل حتى لو كانت المكتبة عالقة على قفل داخلي */
+export function purgeStoredSession() {
+  try {
+    localStorage.removeItem(AUTH_STORAGE_KEY)
+  } catch {
+    /* تجاهل */
+  }
+}
+
+/**
+ * قفل بسيط بدل navigator.locks.
+ * القفل الافتراضي قد يعلق إلى الأبد لو فشل تجديد توكن غير صالح،
+ * فيبقى التطبيق واقفًا على شاشة التحميل. هذا البديل ينفّذ العملية مباشرة.
+ */
+const passthroughLock = async <R,>(_name: string, _acquireTimeout: number, fn: () => Promise<R>): Promise<R> => fn()
+
 export const supabase = createClient<Database>(url ?? 'http://localhost', anon ?? 'public-anon-key', {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: false,
-    storageKey: 'moallem.auth',
+    storageKey: AUTH_STORAGE_KEY,
+    lock: passthroughLock,
   },
   global: { headers: { 'x-application-name': 'moallem-pwa' } },
 })
+
+/** يرفض الوعد بعد مهلة — يمنع تعليق الواجهة على أي نداء شبكي */
+export function withTimeout<T>(promise: PromiseLike<T>, ms: number, label = 'timeout'): Promise<T> {
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(label)), ms)),
+  ])
+}
 
 /** رسالة خطأ عربية مفهومة بدل رسائل Supabase الإنجليزية */
 export function humanError(e: unknown): string {

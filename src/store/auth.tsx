@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { supabase, studentEmail, humanError } from '@/lib/supabase'
+import { supabase, studentEmail, humanError, withTimeout, purgeStoredSession } from '@/lib/supabase'
 import type { Profile, Student } from '@/lib/database.types'
 
 interface AuthValue {
@@ -31,10 +31,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return
     }
     try {
-      const { data: p } = await supabase.from('profiles').select('*').eq('id', s.user.id).maybeSingle()
+      const { data: p } = await withTimeout(
+        supabase.from('profiles').select('*').eq('id', s.user.id).maybeSingle(),
+        10_000,
+      )
       setProfile((p as Profile) ?? null)
       if (p?.student_id) {
-        const { data: st } = await supabase.from('students').select('*').eq('id', p.student_id).maybeSingle()
+        const { data: st } = await withTimeout(
+          supabase.from('students').select('*').eq('id', p.student_id).maybeSingle(),
+          10_000,
+        )
         setStudent((st as Student) ?? null)
       } else {
         setStudent(null)
@@ -48,12 +54,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   /** جلسة مخزّنة تالفة أو منتهية: نمسحها محليًا ونعرض شاشة الدخول */
   async function clearStaleSession() {
+    // نمسح التخزين أولًا: يعمل حتى لو كانت المكتبة عالقة
+    purgeStoredSession()
     try {
-      await supabase.auth.signOut({ scope: 'local' })
+      await withTimeout(supabase.auth.signOut({ scope: 'local' }), 4000)
     } catch {
-      try {
-        localStorage.removeItem('moallem.auth')
-      } catch { /* تجاهل */ }
+      /* تجاهل — التخزين اتمسح بالفعل */
     }
     setSession(null)
     setProfile(null)
@@ -67,8 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // مهلة أمان: مهما حصل، لا يبقى المستخدم على شاشة التحميل للأبد
     const guard = setTimeout(done, 8000)
 
-    supabase.auth
-      .getSession()
+    withTimeout(supabase.auth.getSession(), 8000)
       .then(async ({ data, error }) => {
         if (!alive) return
         if (error) {
@@ -83,7 +88,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // لو فشل التجديد فالتوكن المخزّن غير صالح — نمسحه ونعرض شاشة الدخول
         // بدلًا من ترك المستخدم في حالة «داخل لكن بلا بيانات».
         if (current?.expires_at && current.expires_at * 1000 < Date.now() + 10_000) {
-          const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession()
+          const { data: refreshed, error: refreshError } = await withTimeout(
+            supabase.auth.refreshSession(),
+            8000,
+          ).catch(() => ({ data: { session: null }, error: new Error('refresh timeout') }))
           if (!alive) return
           if (refreshError || !refreshed.session) {
             await clearStaleSession()

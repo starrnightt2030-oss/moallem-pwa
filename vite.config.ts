@@ -56,17 +56,9 @@ export default defineConfig({
               cacheableResponse: { statuses: [0, 200] },
             },
           },
-          {
-            urlPattern: ({ url }) => url.pathname.includes('/rest/v1/'),
-            handler: 'NetworkFirst',
-            method: 'GET',
-            options: {
-              cacheName: 'api-cache',
-              networkTimeoutSeconds: 6,
-              expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
+          // ملاحظة أمنية: لا نخزّن ردود /rest/v1/ إطلاقًا.
+          // الكاش مشترك بين المستخدمين على نفس المتصفح ولا يميّز رأس Authorization،
+          // فتخزين بيانات طالب قد يعرضها لمستخدم آخر. البيانات تُجلب من الشبكة دائمًا.
           {
             urlPattern: ({ url }) => url.pathname.includes('/storage/v1/'),
             handler: 'CacheFirst',
