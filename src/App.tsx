@@ -31,7 +31,7 @@ const PortalMessages = lazy(() => import('@/features/portal/PortalMessages'))
 const PortalProject  = lazy(() => import('@/features/portal/PortalProject'))
 
 export default function App() {
-  const { session, profile, loading, isAdmin, isStudent } = useAuth()
+  const { session, profile, loading, isAdmin, isStudent, signOut } = useAuth()
 
   if (!isConfigured) return <SetupNotice />
   if (loading) return <PageLoader label="جارٍ التحقق من الجلسة…" />
@@ -40,9 +40,20 @@ export default function App() {
   if (!profile) {
     return (
       <div className="grid min-h-dvh place-items-center p-6 text-center">
-        <div>
+        <div className="max-w-sm">
           <p className="text-lg font-bold text-ink">لم يتم ربط هذا الحساب ببيانات بعد</p>
-          <p className="mt-2 text-[13px] text-ink-2">تواصل مع المدرّس لتفعيل الحساب.</p>
+          <p className="mt-2 text-[13px] leading-relaxed text-ink-2">
+            الحساب موجود لكن لم تُحدَّد صلاحياته. لو كنت المدرّس، شغّل في محرّر SQL بلوحة Supabase:
+          </p>
+          <pre className="num mt-2 overflow-x-auto rounded-lg bg-surface-2 p-3 text-[12px]" dir="ltr">
+            select public.make_admin('{session.user.email}');
+          </pre>
+          <button
+            onClick={() => signOut()}
+            className="tap mt-4 rounded-xl bg-[var(--brand)] px-5 py-2.5 text-sm font-semibold text-white"
+          >
+            تسجيل الخروج والعودة لشاشة الدخول
+          </button>
         </div>
       </div>
     )

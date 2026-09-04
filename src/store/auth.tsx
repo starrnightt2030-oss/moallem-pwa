@@ -30,31 +30,81 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setStudent(null)
       return
     }
-    const { data: p } = await supabase.from('profiles').select('*').eq('id', s.user.id).maybeSingle()
-    setProfile((p as Profile) ?? null)
-    if (p?.student_id) {
-      const { data: st } = await supabase.from('students').select('*').eq('id', p.student_id).maybeSingle()
-      setStudent((st as Student) ?? null)
-    } else {
+    try {
+      const { data: p } = await supabase.from('profiles').select('*').eq('id', s.user.id).maybeSingle()
+      setProfile((p as Profile) ?? null)
+      if (p?.student_id) {
+        const { data: st } = await supabase.from('students').select('*').eq('id', p.student_id).maybeSingle()
+        setStudent((st as Student) ?? null)
+      } else {
+        setStudent(null)
+      }
+    } catch {
+      // تعذّر جلب الملف الشخصي — لا نُبقي المستخدم عالقًا على شاشة التحميل
+      setProfile(null)
       setStudent(null)
     }
   }
 
+  /** جلسة مخزّنة تالفة أو منتهية: نمسحها محليًا ونعرض شاشة الدخول */
+  async function clearStaleSession() {
+    try {
+      await supabase.auth.signOut({ scope: 'local' })
+    } catch {
+      try {
+        localStorage.removeItem('moallem.auth')
+      } catch { /* تجاهل */ }
+    }
+    setSession(null)
+    setProfile(null)
+    setStudent(null)
+  }
+
   useEffect(() => {
     let alive = true
-    supabase.auth.getSession().then(async ({ data }) => {
+    const done = () => { if (alive) setLoading(false) }
+
+    // مهلة أمان: مهما حصل، لا يبقى المستخدم على شاشة التحميل للأبد
+    const guard = setTimeout(done, 8000)
+
+    supabase.auth
+      .getSession()
+      .then(async ({ data, error }) => {
+        if (!alive) return
+        if (error) {
+          // توكن قديم أو منتهي (تجديد الجلسة رجع خطأ) — نبدأ من جديد
+          await clearStaleSession()
+          return
+        }
+        setSession(data.session)
+        await loadProfile(data.session)
+      })
+      .catch(async () => {
+        if (!alive) return
+        await clearStaleSession()
+      })
+      .finally(() => {
+        clearTimeout(guard)
+        done()
+      })
+
+    const { data: sub } = supabase.auth.onAuthStateChange(async (event, s) => {
       if (!alive) return
-      setSession(data.session)
-      await loadProfile(data.session)
-      setLoading(false)
-    })
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_e, s) => {
+      if (event === 'SIGNED_OUT' || (!s && event === 'TOKEN_REFRESHED')) {
+        setSession(null)
+        setProfile(null)
+        setStudent(null)
+        done()
+        return
+      }
       setSession(s)
       await loadProfile(s)
-      setLoading(false)
+      done()
     })
+
     return () => {
       alive = false
+      clearTimeout(guard)
       sub.subscription.unsubscribe()
     }
   }, [])
