@@ -76,8 +76,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await clearStaleSession()
           return
         }
-        setSession(data.session)
-        await loadProfile(data.session)
+
+        let current = data.session
+
+        // جلسة منتهية أو على وشك الانتهاء: نجدّدها قبل استخدامها.
+        // لو فشل التجديد فالتوكن المخزّن غير صالح — نمسحه ونعرض شاشة الدخول
+        // بدلًا من ترك المستخدم في حالة «داخل لكن بلا بيانات».
+        if (current?.expires_at && current.expires_at * 1000 < Date.now() + 10_000) {
+          const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession()
+          if (!alive) return
+          if (refreshError || !refreshed.session) {
+            await clearStaleSession()
+            return
+          }
+          current = refreshed.session
+        }
+
+        setSession(current)
+        await loadProfile(current)
       })
       .catch(async () => {
         if (!alive) return
