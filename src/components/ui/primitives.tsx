@@ -44,17 +44,27 @@ export interface ButtonProps
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, block, asChild, loading, children, disabled, ...props }, ref) => {
-    const Comp = asChild ? Slot : 'button'
+    const classes = cn(buttonVariants({ variant, size, block }), className)
+
+    /**
+     * مع asChild يستخدم Radix مكوّن Slot، وهو يقبل عنصرًا واحدًا فقط.
+     * تمرير أيقونة التحميل بجانب المحتوى — حتى لو كانت null — يجعله يرمي:
+     * "Slot failed to slot onto its children".
+     * لذلك نمرّر children وحدها في هذه الحالة.
+     */
+    if (asChild) {
+      return (
+        <Slot ref={ref} className={classes} {...props}>
+          {children}
+        </Slot>
+      )
+    }
+
     return (
-      <Comp
-        ref={ref}
-        className={cn(buttonVariants({ variant, size, block }), className)}
-        disabled={disabled || loading}
-        {...props}
-      >
+      <button ref={ref} className={classes} disabled={disabled || loading} {...props}>
         {loading ? <Loader2 className="size-4 animate-spin" /> : null}
         {children}
-      </Comp>
+      </button>
     )
   },
 )
