@@ -112,18 +112,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         done()
       })
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (event, s) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
       if (!alive) return
-      if (event === 'SIGNED_OUT' || (!s && event === 'TOKEN_REFRESHED')) {
+
+      if (event === 'SIGNED_OUT' || !s) {
         setSession(null)
         setProfile(null)
         setStudent(null)
         done()
         return
       }
+
       setSession(s)
-      await loadProfile(s)
-      done()
+
+      /**
+       * مهم جدًا: ممنوع مناداة أي دالة من Supabase (مثل from().select())
+       * داخل هذا الـ callback مباشرةً — عميل المصادقة يكون ما زال ممسكًا
+       * بعمليته الداخلية، وأي استعلام يحتاج الجلسة فينتظرها، فيحدث تعليق
+       * متبادل (deadlock) ولا يكتمل تحميل بيانات المستخدم أبدًا.
+       * الحل الموصى به رسميًا: تأجيل العمل خارج الـ callback.
+       */
+      setTimeout(() => {
+        if (!alive) return
+        loadProfile(s).finally(done)
+      }, 0)
     })
 
     return () => {
