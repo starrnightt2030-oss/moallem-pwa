@@ -46,6 +46,19 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 )
 
+/**
+ * تحديث تلقائي: عند نشر نسخة جديدة يتولّى Service Worker الجديد التحكّم،
+ * فنعيد التحميل مرة واحدة حتى لا يبقى المستخدم على نسخة قديمة من التطبيق.
+ */
+if ('serviceWorker' in navigator) {
+  let reloading = false
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloading) return
+    reloading = true
+    location.reload()
+  })
+}
+
 // إزالة شاشة الإقلاع
 requestAnimationFrame(() => {
   const boot = document.getElementById('boot')
