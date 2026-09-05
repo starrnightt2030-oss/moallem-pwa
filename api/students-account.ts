@@ -97,6 +97,13 @@ export default async function handler(req: any, res: any) {
       url_host: SUPABASE_URL ? SUPABASE_URL.replace(/^https?:\/\//, '').split('.')[0] : null,
       service_key_set: Boolean(SERVICE_KEY),
       service_key_role: keyRole(SERVICE_KEY),
+      service_key_shape: SERVICE_KEY
+        ? { len: SERVICE_KEY.length, dots: (SERVICE_KEY.match(/\./g) || []).length, prefix: SERVICE_KEY.slice(0, 3) }
+        : null,
+      service_key_works: await (async () => {
+        const { error } = await admin.auth.admin.listUsers({ page: 1, perPage: 1 })
+        return error ? `NO — ${error.message}` : 'YES'
+      })(),
       anon_key_set: Boolean(ANON_KEY),
       anon_key_role: keyRole(ANON_KEY),
       domain: DOMAIN,
