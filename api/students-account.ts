@@ -19,6 +19,19 @@ const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
 /** أقل طول يقبله Supabase لكلمة المرور */
 const MIN_PIN = 6
 
+/** نوع مفتاح Supabase (anon / service_role) من داخل التوكن نفسه — لا يكشف المفتاح */
+function keyRole(k: string): string {
+  if (!k) return 'missing'
+  if (k.startsWith('sb_secret_')) return 'service_role (new format)'
+  if (k.startsWith('sb_publishable_')) return 'publishable (NOT service key)'
+  try {
+    const payload = JSON.parse(Buffer.from(k.split('.')[1], 'base64').toString('utf8'))
+    return String(payload.role || 'unknown')
+  } catch {
+    return 'unrecognized'
+  }
+}
+
 /**
  * التحقق من هوية صاحب الطلب.
  * نحاول أولًا بعميل الخدمة، وإن فشل (مفتاح خدمة غير مطابق مثلًا)
@@ -46,6 +59,36 @@ const studentEmail = (code: string) =>
 
 const randomPin = () => String(Math.floor(100000 + Math.random() * 900000))
 
+/**
+ * هل صاحب الطلب مدير؟
+ * (أ) نسأل قاعدة البيانات بدالة is_admin() بجلسة المستخدم نفسه — تعمل مهما كان
+ *     المفتاح المحفوظ على الخادم، لأن الدالة تعتمد على auth.uid().
+ * (ب) وإن تعذّر ذلك نقرأ جدول profiles بمفتاح الخادم.
+ * أي فشل يُعاد سببه في الرسالة بدل رفض صامت.
+ */
+async function checkAdmin(token: string, userId: string): Promise<{ ok: boolean; why: string }> {
+  if (ANON_KEY) {
+    const asUser = createClient(SUPABASE_URL, ANON_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    })
+    const { data, error } = await asUser.rpc('is_admin')
+    if (!error && data === true) return { ok: true, why: '' }
+    if (!error && data === false) return { ok: false, why: 'حسابك غير مسجَّل كمدير في جدول profiles' }
+  }
+
+  const { data: profile, error } = await admin
+    .from('profiles')
+    .select('role')
+    .eq('id', userId)
+    .maybeSingle()
+
+  if (error) return { ok: false, why: `تعذّر قراءة الصلاحيات (${error.message})` }
+  if (!profile) return { ok: false, why: 'لا يوجد سجل صلاحيات لحسابك في جدول profiles' }
+  if (profile.role !== 'admin') return { ok: false, why: `دور حسابك الحالي: ${profile.role}` }
+  return { ok: true, why: '' }
+}
+
 export default async function handler(req: any, res: any) {
   // فحص سريع لإعدادات الخادم: /api/students-account?diag=1 — لا يكشف أي مفتاح
   if (req.method === 'GET' && req.query?.diag) {
@@ -53,7 +96,9 @@ export default async function handler(req: any, res: any) {
       url_set: Boolean(SUPABASE_URL),
       url_host: SUPABASE_URL ? SUPABASE_URL.replace(/^https?:\/\//, '').split('.')[0] : null,
       service_key_set: Boolean(SERVICE_KEY),
+      service_key_role: keyRole(SERVICE_KEY),
       anon_key_set: Boolean(ANON_KEY),
+      anon_key_role: keyRole(ANON_KEY),
       domain: DOMAIN,
     })
     return
@@ -77,13 +122,10 @@ export default async function handler(req: any, res: any) {
       return res.status(401).json({ error: `جلسة غير صالحة — ${who.fail}` })
     }
 
-    const { data: profile } = await admin
-      .from('profiles')
-      .select('role')
-      .eq('id', who.id)
-      .maybeSingle()
-
-    if (profile?.role !== 'admin') return res.status(403).json({ error: 'هذه العملية للمدير فقط' })
+    const isAdmin = await checkAdmin(token, who.id)
+    if (!isAdmin.ok) {
+      return res.status(403).json({ error: `هذه العملية للمدير فقط — ${isAdmin.why}` })
+    }
 
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {}
     const { action, studentId } = body as { action?: string; studentId?: string; pin?: string }
