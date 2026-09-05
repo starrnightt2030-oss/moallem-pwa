@@ -140,7 +140,9 @@ export default async function handler(req: any, res: any) {
       .select('id, code, full_name, auth_user_id')
       .eq('id', studentId)
       .maybeSingle()
-    if (stErr || !student) return res.status(404).json({ error: 'الطالب غير موجود' })
+    // نفرّق بين «فشل الاستعلام» و«الطالب غير موجود» — الأول عادةً خطأ إعداد خادم
+    if (stErr) return res.status(500).json({ error: `تعذّر قراءة بيانات الطالب — ${stErr.message}` })
+    if (!student) return res.status(404).json({ error: 'الطالب غير موجود' })
 
     const email = studentEmail(student.code)
     const custom = body.pin ? String(body.pin).trim() : ''
