@@ -17,6 +17,9 @@ import type { AttendanceStatus, ClassSession } from '@/lib/database.types'
 import { fmtDate, fmtDayName, fmtTime, isoOf, todayISO } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
+/** حصة لم يحن موعدها بعد (تاريخها بعد اليوم) — لا يجوز تسجيل حضورها */
+const isFutureSession = (d: string) => d > todayISO()
+
 export default function AttendancePage() {
   const [params, setParams] = useSearchParams()
   const [sessionId, setSessionId] = useState(params.get('session') ?? '')
@@ -79,11 +82,16 @@ export default function AttendancePage() {
             </Card>
           ) : (
             <div className="grid gap-2.5 md:grid-cols-2">
-              {sessions.map((s) => (
+              {sessions.map((s) => {
+                const future = isFutureSession(s.session_date)
+                return (
                 <button
                   key={s.id}
                   onClick={() => setSessionId(s.id)}
-                  className="tap animate-fade-up flex items-center gap-3 rounded-2xl border border-line bg-surface p-3.5 text-right transition hover:-translate-y-0.5 hover:shadow-[var(--shadow-2)]"
+                  className={cn(
+                    'tap animate-fade-up flex items-center gap-3 rounded-2xl border border-line bg-surface p-3.5 text-right transition hover:-translate-y-0.5 hover:shadow-[var(--shadow-2)]',
+                    future && 'opacity-65',
+                  )}
                 >
                   <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[color-mix(in_oklab,var(--brand)_12%,transparent)] text-[var(--brand)]">
                     <ClipboardCheck className="size-5" />
@@ -95,9 +103,10 @@ export default function AttendancePage() {
                       {s.start_time ? ` · ${fmtTime(s.start_time)}` : ''}
                     </p>
                   </div>
-                  <SessionBadge status={s.status} />
+                  {future ? <Badge tone="warning">لم تبدأ بعد</Badge> : <SessionBadge status={s.status} />}
                 </button>
-              ))}
+                )
+              })}
             </div>
           )}
         </>
@@ -118,6 +127,9 @@ function AttendanceSheet({ session, onBack }: { session: ClassSession; onBack: (
   const [marks, setMarks] = useState<Record<string, AttendanceStatus>>({})
   const [notes, setNotes] = useState<Record<string, string>>({})
   const [noteFor, setNoteFor] = useState<string | null>(null)
+
+  /** الحصة لم يحن موعدها بعد: العرض مسموح والتسجيل ممنوع */
+  const locked = isFutureSession(session.session_date)
 
   const roster = useMemo(() => {
     const inSubject = new Set(enrollments.filter((e) => e.subject_id === session.subject_id && e.is_active).map((e) => e.student_id))
@@ -150,6 +162,7 @@ function AttendanceSheet({ session, onBack }: { session: ClassSession; onBack: (
 
   const save = useAction(
     async () => {
+      if (locked) throw new Error('لا يمكن تسجيل الحضور قبل موعد الحصة')
       if (!roster.length) throw new Error('لا يوجد طلاب في هذه الحصة')
       const records = roster.map((s) => ({
         student_id: s.id,
@@ -180,6 +193,18 @@ function AttendanceSheet({ session, onBack }: { session: ClassSession; onBack: (
   return (
     <div className="space-y-4">
       <Button variant="ghost" size="sm" onClick={onBack} className="-mr-2">→ كل الحصص</Button>
+
+      {locked && (
+        <Card className="flex items-start gap-3 border-warning/40 bg-warning-bg p-3.5">
+          <CalendarDays className="mt-0.5 size-5 shrink-0 text-warning" />
+          <div>
+            <p className="text-[13.5px] font-bold text-warning">لم يحن موعد هذه الحصة بعد</p>
+            <p className="mt-0.5 text-[12px] leading-relaxed text-warning">
+              موعدها {fmtDayName(session.session_date)} {fmtDate(session.session_date)} — تسجيل الحضور يفتح في يوم الحصة.
+            </p>
+          </div>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -213,13 +238,13 @@ function AttendanceSheet({ session, onBack }: { session: ClassSession; onBack: (
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2">
-            <Button variant="subtle" size="sm" onClick={() => setAll('present')}>
+            <Button variant="subtle" size="sm" disabled={locked} onClick={() => setAll('present')}>
               <CheckCheck className="size-4" /> الجميع حاضر
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => setAll('absent')}>
+            <Button variant="secondary" size="sm" disabled={locked} onClick={() => setAll('absent')}>
               <X className="size-4" /> الجميع غائب
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setMarks({})}>مسح التحديد</Button>
+            <Button variant="ghost" size="sm" disabled={locked} onClick={() => setMarks({})}>مسح التحديد</Button>
           </div>
         </CardContent>
       </Card>
@@ -254,11 +279,13 @@ function AttendanceSheet({ session, onBack }: { session: ClassSession; onBack: (
                       <button
                         key={v}
                         data-on={cur === v}
+                        disabled={locked}
                         onClick={() => setMarks({ ...marks, [s.id]: v })}
-                        title={label}
+                        title={locked ? 'لم يحن موعد الحصة بعد' : label}
                         aria-label={label}
                         className={cn(
                           'tap grid size-10 place-items-center rounded-xl border border-line bg-surface text-ink-2 transition active:scale-95',
+                          'disabled:cursor-not-allowed disabled:opacity-45 disabled:active:scale-100',
                           cls,
                         )}
                       >
@@ -266,8 +293,9 @@ function AttendanceSheet({ session, onBack }: { session: ClassSession; onBack: (
                       </button>
                     ))}
                     <button
+                      disabled={locked}
                       onClick={() => setNoteFor(s.id)}
-                      className="tap grid size-10 place-items-center rounded-xl border border-line bg-surface text-muted transition hover:text-ink"
+                      className="tap grid size-10 place-items-center rounded-xl border border-line bg-surface text-muted transition hover:text-ink disabled:cursor-not-allowed disabled:opacity-45"
                       aria-label="ملاحظة"
                     >
                       …
@@ -282,9 +310,17 @@ function AttendanceSheet({ session, onBack }: { session: ClassSession; onBack: (
           <div className="safe-b fixed inset-x-0 bottom-14 z-20 border-t border-line glass p-3 lg:bottom-0 lg:static lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
             <div className="mx-auto flex max-w-[1400px] items-center gap-3">
               <p className="num flex-1 text-[12.5px] text-ink-2">
-                {stats.present + stats.absent + stats.late + stats.excused} / {roster.length} تم تحديدهم
+                {locked
+                  ? 'تسجيل الحضور يفتح في يوم الحصة'
+                  : `${stats.present + stats.absent + stats.late + stats.excused} / ${roster.length} تم تحديدهم`}
               </p>
-              <Button onClick={() => save.mutate(undefined as never)} loading={save.isPending} size="lg" className="min-w-40">
+              <Button
+                onClick={() => save.mutate(undefined as never)}
+                loading={save.isPending}
+                disabled={locked}
+                size="lg"
+                className="min-w-40"
+              >
                 <Save className="size-4" /> حفظ الحضور
               </Button>
             </div>

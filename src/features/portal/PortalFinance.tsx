@@ -47,6 +47,9 @@ export default function PortalFinance() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[13.5px] font-semibold text-ink">{c.title}</p>
+                    {c.notes && (
+                      <p className="mt-0.5 text-[12px] leading-relaxed text-ink-2">{c.notes}</p>
+                    )}
                     <p className="text-[11.5px] text-muted">
                       {fmtDate(c.due_date)}
                       {Number(c.paid_amount) > 0 ? ` · مدفوع منه ${fmtMoney(Number(c.paid_amount), settings.currency_symbol)}` : ''}

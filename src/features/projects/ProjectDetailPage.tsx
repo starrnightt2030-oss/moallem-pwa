@@ -71,7 +71,7 @@ export default function ProjectDetailPage() {
         actions={
           <>
             <Button variant="secondary" size="sm" onClick={() => setChargeOpen(true)}>
-              <ReceiptText className="size-4" /> بند مالي للمشروع
+              <ReceiptText className="size-4" /> تكاليف المشروع
             </Button>
             <Button variant="secondary" size="sm" onClick={() => setEnrollOpen(true)}>
               <UserPlus className="size-4" /> تسجيل طلاب
@@ -193,7 +193,13 @@ export default function ProjectDetailPage() {
 
       <QuestionForm open={qOpen} onOpenChange={setQOpen} question={editQ} projectId={project.id} nextIdx={questions.length + 1} />
       <EnrollDialog open={enrollOpen} onOpenChange={setEnrollOpen} projectId={project.id} current={enrollments.map((e) => e.student_id)} yearId={project.year_id} />
-      <ChargeDialog open={chargeOpen} onOpenChange={setChargeOpen} />
+      <ChargeDialog
+        open={chargeOpen}
+        onOpenChange={setChargeOpen}
+        projectId={project.id}
+        projectTitle={project.title}
+        projectStudentIds={enrollments.map((e) => e.student_id)}
+      />
       <TrackDialog
         studentId={tracking}
         onClose={() => setTracking(null)}

@@ -7,13 +7,39 @@
  */
 import { createClient } from '@supabase/supabase-js'
 
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '')
+const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()
+const ANON_KEY = (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '').trim()
 const DOMAIN = process.env.STUDENT_EMAIL_DOMAIN || process.env.VITE_STUDENT_EMAIL_DOMAIN || 'students.moallem.app'
 
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 })
+
+/** أقل طول يقبله Supabase لكلمة المرور */
+const MIN_PIN = 6
+
+/**
+ * التحقق من هوية صاحب الطلب.
+ * نحاول أولًا بعميل الخدمة، وإن فشل (مفتاح خدمة غير مطابق مثلًا)
+ * نعيد المحاولة بعميل عادي يحمل توكن المستخدم — حتى لا يُرفض
+ * المدير بـ«جلسة غير صالحة» بسبب إعداد خادم لا علاقة له بجلسته.
+ */
+async function resolveUser(token: string): Promise<{ id: string } | { fail: string }> {
+  const { data, error } = await admin.auth.getUser(token)
+  if (data?.user) return { id: data.user.id }
+
+  if (ANON_KEY) {
+    const asUser = createClient(SUPABASE_URL, ANON_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    })
+    const { data: d2 } = await asUser.auth.getUser(token)
+    if (d2?.user) return { id: d2.user.id }
+  }
+
+  return { fail: error?.message || 'تعذّر التحقق من الجلسة' }
+}
 
 const studentEmail = (code: string) =>
   `${String(code).trim().toLowerCase().replace(/[^a-z0-9_-]/g, '')}@${DOMAIN}`
@@ -21,6 +47,18 @@ const studentEmail = (code: string) =>
 const randomPin = () => String(Math.floor(100000 + Math.random() * 900000))
 
 export default async function handler(req: any, res: any) {
+  // فحص سريع لإعدادات الخادم: /api/students-account?diag=1 — لا يكشف أي مفتاح
+  if (req.method === 'GET' && req.query?.diag) {
+    res.status(200).json({
+      url_set: Boolean(SUPABASE_URL),
+      url_host: SUPABASE_URL ? SUPABASE_URL.replace(/^https?:\/\//, '').split('.')[0] : null,
+      service_key_set: Boolean(SERVICE_KEY),
+      anon_key_set: Boolean(ANON_KEY),
+      domain: DOMAIN,
+    })
+    return
+  }
+
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'الطريقة غير مسموحة' })
     return
@@ -34,13 +72,15 @@ export default async function handler(req: any, res: any) {
     const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
     if (!token) return res.status(401).json({ error: 'مطلوب تسجيل الدخول' })
 
-    const { data: userData, error: userErr } = await admin.auth.getUser(token)
-    if (userErr || !userData?.user) return res.status(401).json({ error: 'جلسة غير صالحة' })
+    const who = await resolveUser(token)
+    if ('fail' in who) {
+      return res.status(401).json({ error: `جلسة غير صالحة — ${who.fail}` })
+    }
 
     const { data: profile } = await admin
       .from('profiles')
       .select('role')
-      .eq('id', userData.user.id)
+      .eq('id', who.id)
       .maybeSingle()
 
     if (profile?.role !== 'admin') return res.status(403).json({ error: 'هذه العملية للمدير فقط' })
@@ -57,11 +97,17 @@ export default async function handler(req: any, res: any) {
     if (stErr || !student) return res.status(404).json({ error: 'الطالب غير موجود' })
 
     const email = studentEmail(student.code)
-    const pin = (body.pin && String(body.pin).trim()) || randomPin()
+    const custom = body.pin ? String(body.pin).trim() : ''
+    if (custom && custom.length < MIN_PIN) {
+      return res.status(400).json({ error: `الرمز السري يجب ألا يقل عن ${MIN_PIN} خانات` })
+    }
+    const pin = custom || randomPin()
 
     if (action === 'create') {
       if (student.auth_user_id) {
-        await admin.auth.admin.updateUserById(student.auth_user_id, { password: pin })
+        const { error: updErr } = await admin.auth.admin.updateUserById(student.auth_user_id, { password: pin })
+        if (updErr) return res.status(400).json({ error: updErr.message })
+        await admin.from('students').update({ has_account: true }).eq('id', student.id)
         return res.status(200).json({ ok: true, code: student.code, pin, existed: true })
       }
 
@@ -91,7 +137,7 @@ export default async function handler(req: any, res: any) {
       })
       await admin.from('students').update({ auth_user_id: created.user.id, has_account: true }).eq('id', student.id)
       await admin.from('audit_logs').insert({
-        actor_id: userData.user.id, action: 'create_student_account', entity: 'students', entity_id: student.id,
+        actor_id: who.id, action: 'create_student_account', entity: 'students', entity_id: student.id,
       })
       return res.status(200).json({ ok: true, code: student.code, pin })
     }
@@ -101,7 +147,7 @@ export default async function handler(req: any, res: any) {
       const { error } = await admin.auth.admin.updateUserById(student.auth_user_id, { password: pin })
       if (error) return res.status(400).json({ error: error.message })
       await admin.from('audit_logs').insert({
-        actor_id: userData.user.id, action: 'reset_student_pin', entity: 'students', entity_id: student.id,
+        actor_id: who.id, action: 'reset_student_pin', entity: 'students', entity_id: student.id,
       })
       return res.status(200).json({ ok: true, code: student.code, pin })
     }
@@ -110,7 +156,7 @@ export default async function handler(req: any, res: any) {
       if (student.auth_user_id) await admin.auth.admin.deleteUser(student.auth_user_id)
       await admin.from('students').update({ auth_user_id: null, has_account: false }).eq('id', student.id)
       await admin.from('audit_logs').insert({
-        actor_id: userData.user.id, action: 'disable_student_account', entity: 'students', entity_id: student.id,
+        actor_id: who.id, action: 'disable_student_account', entity: 'students', entity_id: student.id,
       })
       return res.status(200).json({ ok: true })
     }

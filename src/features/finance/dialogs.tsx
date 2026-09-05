@@ -150,22 +150,33 @@ export function PaymentDialog({
 }
 
 /* ======================= إضافة بند مالي ======================= */
-type Scope = 'student' | 'group' | 'year' | 'all'
+type Scope = 'student' | 'group' | 'year' | 'all' | 'project'
 
 export function ChargeDialog({
   open,
   onOpenChange,
   studentId,
+  projectId,
+  projectTitle,
+  projectStudentIds,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
   studentId?: string
+  /** عند فتحه من صفحة مشروع: يقيّد الاختيار بطلاب المشروع ويُدرج اسمه في تفاصيل البند */
+  projectId?: string
+  projectTitle?: string
+  projectStudentIds?: string[]
 }) {
   const { settings } = useSettings()
   const { years, groups, yearName } = useLookups()
   const { data: students = [] } = useStudents()
 
-  const [scope, setScope] = useState<Scope>(studentId ? 'student' : 'group')
+  const inProject = Boolean(projectId)
+  const enrolledSet = useMemo(() => new Set(projectStudentIds ?? []), [projectStudentIds])
+  const defaultScope: Scope = studentId ? 'student' : inProject ? 'project' : 'group'
+
+  const [scope, setScope] = useState<Scope>(defaultScope)
   const [title, setTitle] = useState('')
   const [amount, setAmount] = useState('')
   const [due, setDue] = useState(todayISO())
@@ -177,17 +188,46 @@ export function ChargeDialog({
 
   useEffect(() => {
     if (!open) return
-    setScope(studentId ? 'student' : 'group')
+    setScope(defaultScope)
     setTitle(''); setAmount(''); setDue(todayISO()); setNotes(''); setQ('')
     setStudentIds(studentId ? [studentId] : []); setGroupIds([]); setYearIds([])
-  }, [open, studentId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, studentId, projectId])
+
+  /** داخل مشروع: كل الاختيارات محصورة في الطلاب المسجّلين فيه */
+  const pool = useMemo(
+    () => (inProject ? students.filter((s) => enrolledSet.has(s.id)) : students),
+    [students, inProject, enrolledSet],
+  )
+
+  /** داخل مشروع نحسب الطلاب المستهدفين هنا حتى لا يخرج البند عن المسجّلين فيه */
+  const projectTargetIds = useMemo(() => {
+    if (!inProject) return []
+    const active = pool.filter((s) => s.status === 'active')
+    if (scope === 'project' || scope === 'all') return active.map((s) => s.id)
+    if (scope === 'student') return studentIds.filter((id) => enrolledSet.has(id))
+    if (scope === 'group') return active.filter((s) => s.group_id && groupIds.includes(s.group_id)).map((s) => s.id)
+    return active.filter((s) => s.year_id && yearIds.includes(s.year_id)).map((s) => s.id)
+  }, [inProject, pool, scope, studentIds, groupIds, yearIds, enrolledSet])
 
   const targetCount = useMemo(() => {
-    if (scope === 'all') return students.filter((s) => s.status === 'active').length
+    if (inProject) return projectTargetIds.length
+    const active = students.filter((s) => s.status === 'active')
+    if (scope === 'all') return active.length
     if (scope === 'student') return studentIds.length
-    if (scope === 'group') return students.filter((s) => s.status === 'active' && s.group_id && groupIds.includes(s.group_id)).length
-    return students.filter((s) => s.status === 'active' && s.year_id && yearIds.includes(s.year_id)).length
-  }, [scope, students, studentIds, groupIds, yearIds])
+    if (scope === 'group') return active.filter((s) => s.group_id && groupIds.includes(s.group_id)).length
+    return active.filter((s) => s.year_id && yearIds.includes(s.year_id)).length
+  }, [inProject, projectTargetIds, scope, students, studentIds, groupIds, yearIds])
+
+  /** تفاصيل تُحفظ مع البند ويراها الطالب في «المستحقات» */
+  const detail = useMemo(() => {
+    const parts: string[] = []
+    if (projectTitle) parts.push(`مشروع: ${projectTitle}`)
+    const v = Number(amount || 0)
+    if (v > 0) parts.push(`${fmtMoney(v, settings.currency_symbol)} لكل طالب`)
+    if (notes.trim()) parts.push(notes.trim())
+    return parts.join(' · ')
+  }, [projectTitle, amount, notes, settings.currency_symbol])
 
   const save = useAction(
     async () => {
@@ -195,8 +235,15 @@ export function ChargeDialog({
       const v = Number(amount)
       if (!v || v <= 0) throw new Error('أدخل مبلغًا صحيحًا')
       if (targetCount === 0) throw new Error('اختر جهة واحدة على الأقل')
+      // داخل مشروع: نرسل قائمة طلاب صريحة (محصورة في المسجّلين بالمشروع)
+      if (inProject) {
+        return api.addBulkCharge({
+          title: title.trim(), amount: v, due, notes: detail || null,
+          studentIds: projectTargetIds,
+        })
+      }
       return api.addBulkCharge({
-        title: title.trim(), amount: v, due, notes: notes.trim() || null,
+        title: title.trim(), amount: v, due, notes: detail || null,
         studentIds: scope === 'student' ? studentIds : [],
         groupIds: scope === 'group' ? groupIds : [],
         yearIds: scope === 'year' ? yearIds : [],
@@ -206,11 +253,21 @@ export function ChargeDialog({
     {
       invalidate: INVALIDATE,
       onDone: () => onOpenChange(false),
-      success: 'تم إضافة البند المالي ✓',
+      success: 'تم إضافة البند المالي وإضافته لرصيد الطلاب ✓',
     },
   )
 
-  const list = useMemo(() => students.filter((s) => s.status === 'active' && (!q || matches(s.full_name, q) || matches(s.code, q))), [students, q])
+  const list = useMemo(
+    () => pool.filter((s) => s.status === 'active' && (!q || matches(s.full_name, q) || matches(s.code, q))),
+    [pool, q],
+  )
+
+  /** المجموعات المتاحة داخل مشروع = مجموعات طلابه فقط */
+  const groupList = useMemo(() => {
+    if (!inProject) return groups
+    const ids = new Set(pool.filter((s) => s.status === 'active' && s.group_id).map((s) => s.group_id as string))
+    return groups.filter((g) => ids.has(g.id))
+  }, [groups, inProject, pool])
 
   const toggle = (arr: string[], set: (v: string[]) => void, id: string) =>
     set(arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id])
@@ -219,8 +276,12 @@ export function ChargeDialog({
     <Modal
       open={open}
       onOpenChange={onOpenChange}
-      title="إضافة بند مالي"
-      description="أدوات، مذكرات، طباعة، خامات مشروع… يمكن تطبيقه على مجموعة كاملة"
+      title={inProject ? `بند مالي — ${projectTitle ?? 'المشروع'}` : 'إضافة بند مالي'}
+      description={
+        inProject
+          ? 'يُضاف المبلغ إلى رصيد كل طالب مستهدف مع تفاصيله، ويظهر له في «المستحقات»'
+          : 'أدوات، مذكرات، طباعة، خامات مشروع… يمكن تطبيقه على مجموعة كاملة'
+      }
       size="lg"
       footer={
         <>
@@ -234,7 +295,11 @@ export function ChargeDialog({
       <div className="space-y-3.5">
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="اسم البند" required className="sm:col-span-2">
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="مثال: أدوات مشروع التخرج" />
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={inProject ? `مثال: خامات ${projectTitle ?? 'المشروع'}` : 'مثال: أدوات مشروع التخرج'}
+            />
           </Field>
           <Field label="المبلغ لكل طالب" required>
             <Input dir="ltr" inputMode="decimal" className="num text-right text-base font-bold" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" />
@@ -246,12 +311,18 @@ export function ChargeDialog({
 
         <Field label="تطبيق على">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {([
-              ['student', 'طلاب محددين'],
-              ['group', 'مجموعات'],
-              ['year', 'سنوات دراسية'],
-              ['all', 'كل الطلاب'],
-            ] as [Scope, string][]).map(([v, label]) => (
+            {((inProject
+              ? [
+                  ['project', 'كل طلاب المشروع'],
+                  ['group', 'مجموعات'],
+                  ['student', 'طلاب محددين'],
+                ]
+              : [
+                  ['student', 'طلاب محددين'],
+                  ['group', 'مجموعات'],
+                  ['year', 'سنوات دراسية'],
+                  ['all', 'كل الطلاب'],
+                ]) as [Scope, string][]).map(([v, label]) => (
               <button
                 key={v}
                 type="button"
@@ -270,7 +341,7 @@ export function ChargeDialog({
 
         {scope === 'group' && (
           <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-line p-2">
-            {groups.map((g) => (
+            {groupList.map((g) => (
               <label key={g.id} className="flex cursor-pointer items-center gap-2.5 rounded-lg p-2 hover:bg-surface-2">
                 <Checkbox checked={groupIds.includes(g.id)} onCheckedChange={() => toggle(groupIds, setGroupIds, g.id)} />
                 <span className="text-[13px] font-medium text-ink">{g.name}</span>
@@ -306,6 +377,12 @@ export function ChargeDialog({
           </div>
         )}
 
+        {scope === 'project' && (
+          <p className="rounded-xl bg-[color-mix(in_oklab,var(--brand)_10%,transparent)] p-3 text-[13px] text-[var(--brand)]">
+            سيُضاف البند لكل طلاب المشروع النشطين ({targetCount} طالب).
+          </p>
+        )}
+
         {scope === 'all' && (
           <p className="rounded-xl bg-warning-bg p-3 text-[13px] text-warning">
             سيتم إنشاء هذا البند لكل الطلاب النشطين ({targetCount} طالب).
@@ -315,6 +392,13 @@ export function ChargeDialog({
         <Field label="ملاحظات">
           <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="اختياري…" />
         </Field>
+
+        {detail && (
+          <div className="rounded-xl border border-line bg-surface-2 p-3">
+            <p className="text-[12px] font-semibold text-ink-2">تفاصيل تظهر للطالب مع البند</p>
+            <p className="mt-1 text-[12.5px] leading-relaxed text-ink">{detail}</p>
+          </div>
+        )}
 
         <div className="flex items-center justify-between rounded-xl bg-surface-2 p-3">
           <span className="text-[13px] text-ink-2">الإجمالي المتوقع</span>

@@ -342,6 +342,7 @@ export default function StudentProfilePage() {
                   <div key={c.id} className="flex items-center gap-3 p-3.5">
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[13.5px] font-semibold text-ink">{c.title}</p>
+                      {c.notes && <p className="mt-0.5 text-[12px] leading-relaxed text-ink-2">{c.notes}</p>}
                       <p className="text-[11.5px] text-muted">
                         {fmtDate(c.due_date)} · {c.kind === 'cycle' ? 'رسوم دورة' : 'بند إضافي'}
                       </p>
@@ -526,13 +527,21 @@ function AccountDialog({
       footer={
         <>
           <Button variant="secondary" onClick={() => onOpenChange(false)}>إلغاء</Button>
-          <Button loading={busy} onClick={() => onSubmit(pin.trim() || undefined)}>
+          <Button
+            loading={busy}
+            disabled={!!pin.trim() && pin.trim().length < 6}
+            onClick={() => onSubmit(pin.trim() || undefined)}
+          >
             {hasAccount ? 'تغيير' : 'إنشاء'}
           </Button>
         </>
       }
     >
-      <Field label="رمز سري مخصص" hint="اتركه فارغًا لتوليد رمز عشوائي من 6 أرقام">
+      <Field
+        label="رمز سري مخصص"
+        hint="اتركه فارغًا لتوليد رمز عشوائي من 6 أرقام — أقل طول مسموح 6 خانات"
+        error={pin.trim() && pin.trim().length < 6 ? 'الرمز السري يجب ألا يقل عن 6 خانات' : undefined}
+      >
         <Input dir="ltr" inputMode="numeric" className="num text-right" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="••••••" />
       </Field>
     </Modal>
